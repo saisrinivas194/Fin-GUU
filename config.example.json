@@ -1,0 +1,10 @@
+{
+  "finnhub_api_key": "your_finnhub_api_key_here",
+  "firebase_credentials_path": "path/to/your/firebase-service-account.json",
+  "auto_match_threshold": 90,
+  "save_to_firebase": false,
+  "firebase_collection": "ticker_mappings",
+  "firebase_companies_collection": "companies",
+  "firebase_name_field": "name"
+}
+
