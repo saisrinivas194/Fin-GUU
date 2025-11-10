@@ -1,0 +1,4 @@
+requests>=2.31.0
+rapidfuzz>=3.5.0
+firebase-admin>=6.2.0
+
