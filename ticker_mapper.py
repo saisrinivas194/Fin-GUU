@@ -5,13 +5,13 @@ from typing import Dict, List, Tuple, Optional
 from rapidfuzz import process, fuzz
 import requests
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, db
 
 
 class TickerMapper:
     def __init__(self, finnhub_api_key: str, firebase_credentials_path: str, 
                  auto_match_threshold: int = 90, firebase_collection: str = 'companies',
-                 firebase_name_field: str = 'name'):
+                 firebase_name_field: str = 'name', firebase_database_url: str = ''):
         """Initialize the TickerMapper."""
         self.finnhub_api_key = finnhub_api_key
         self.auto_match_threshold = auto_match_threshold
@@ -22,8 +22,11 @@ class TickerMapper:
         # Initialize Firebase
         if not firebase_admin._apps:
             cred = credentials.Certificate(firebase_credentials_path)
-            firebase_admin.initialize_app(cred)
-        self.db = firestore.client()
+            app_options = {}
+            if firebase_database_url:
+                app_options['databaseURL'] = firebase_database_url
+            firebase_admin.initialize_app(cred, app_options)
+        self.db = db.reference()
     
     def normalize_name(self, name: str) -> str:
         """Normalize company name for matching."""
@@ -60,15 +63,16 @@ class TickerMapper:
         """Fetch all companies from Firebase."""
         print("Fetching companies from Firebase...")
         try:
-            companies_ref = self.db.collection(self.firebase_collection)
-            docs = companies_ref.stream()
+            companies_ref = self.db.child(self.firebase_collection)
+            companies_data = companies_ref.get()
             
             company_map = {}
-            for doc in docs:
-                data = doc.to_dict()
-                name = data.get(self.firebase_name_field, '').strip()
-                if name:
-                    company_map[name] = doc.id
+            if companies_data:
+                for company_id, data in companies_data.items():
+                    if isinstance(data, dict):
+                        name = data.get(self.firebase_name_field, '').strip()
+                        if name:
+                            company_map[name] = company_id
             
             print(f"Fetched {len(company_map)} companies from Firebase")
             return company_map
@@ -199,27 +203,17 @@ class TickerMapper:
     def save_mappings_to_firebase(self, mappings: Dict[str, str], 
                                   collection_name: str = "ticker_mappings"):
         """Save ticker to company ID mappings to Firebase."""
-        print(f"Saving mappings to Firebase collection '{collection_name}'...")
-        batch = self.db.batch()
-        batch_count = 0
+        print(f"Saving mappings to Firebase path '{collection_name}'...")
+        mappings_ref = self.db.child(collection_name)
         
+        updates = {}
         for ticker, company_id in mappings.items():
-            doc_ref = self.db.collection(collection_name).document(ticker)
-            batch.set(doc_ref, {
+            updates[ticker] = {
                 'ticker': ticker,
-                'company_id': company_id,
-                'updated_at': firestore.SERVER_TIMESTAMP
-            })
-            batch_count += 1
-            
-            if batch_count >= 500:
-                batch.commit()
-                batch = self.db.batch()
-                batch_count = 0
+                'company_id': company_id
+            }
         
-        if batch_count > 0:
-            batch.commit()
-        
+        mappings_ref.update(updates)
         print(f"Saved {len(mappings)} mappings to Firebase")
     
     def run(self, save_to_firebase: bool = False, firebase_collection: str = "ticker_mappings"):
@@ -261,6 +255,7 @@ def main():
     
     finnhub_api_key = config.get('finnhub_api_key')
     firebase_credentials = config.get('firebase_credentials_path')
+    firebase_database_url = config.get('firebase_database_url', '')
     auto_match_threshold = config.get('auto_match_threshold', 90)
     save_to_firebase = config.get('save_to_firebase', False)
     firebase_collection = config.get('firebase_collection', 'ticker_mappings')
@@ -284,7 +279,8 @@ def main():
         firebase_credentials_path=firebase_credentials,
         auto_match_threshold=auto_match_threshold,
         firebase_collection=firebase_companies_collection,
-        firebase_name_field=firebase_name_field
+        firebase_name_field=firebase_name_field,
+        firebase_database_url=firebase_database_url
     )
     
     mapper.run(save_to_firebase=save_to_firebase, firebase_collection=firebase_collection)
