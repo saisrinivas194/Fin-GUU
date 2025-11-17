@@ -136,30 +136,46 @@ class TickerMapper:
                 return None
     
     def process_matching(self, finnhub_companies: Dict[str, str], 
-                        firebase_companies: Dict[str, str]) -> Dict[str, str]:
+                        firebase_companies: Dict[str, str],
+                        existing_mappings: Dict[str, str] = None,
+                        save_progress_file: str = None) -> Dict[str, str]:
         """Process matching between Finnhub and Firebase companies."""
-        mappings = {}
+        if existing_mappings is None:
+            existing_mappings = {}
+        
+        mappings = existing_mappings.copy()
         firebase_names = list(firebase_companies.keys())
         normalized_firebase = {self.normalize_name(name): name for name in firebase_names}
         total = len(finnhub_companies)
+        already_mapped = sum(1 for ticker in finnhub_companies.values() if ticker in mappings)
         
         print(f"\nProcessing {total} companies...")
         print(f"Auto-match threshold: {self.auto_match_threshold}%")
+        if already_mapped > 0:
+            print(f"Already mapped: {already_mapped} (will be skipped)")
         print()
         
         exact_matches = 0
         auto_fuzzy_matches = 0
         manual_matches = 0
         skipped = 0
+        processed = 0
         
         for idx, (finnhub_name, ticker) in enumerate(finnhub_companies.items(), 1):
-            print(f"[{idx}/{total}] Processing: {finnhub_name} ({ticker})")
+            # Skip if already mapped
+            if ticker in mappings:
+                continue
+            
+            processed += 1
+            print(f"[{processed}/{total - already_mapped}] Processing: {finnhub_name} ({ticker})")
             
             exact_match = self.find_exact_match(finnhub_name, normalized_firebase)
             if exact_match:
                 mappings[ticker] = firebase_companies[exact_match]
                 exact_matches += 1
                 print(f"  Exact match: {exact_match}")
+                if save_progress_file:
+                    self.save_mappings(mappings, save_progress_file)
                 continue
             
             fuzzy_matches = self.find_fuzzy_matches(finnhub_name, firebase_names)
@@ -173,12 +189,16 @@ class TickerMapper:
                 mappings[ticker] = firebase_companies[best_match]
                 auto_fuzzy_matches += 1
                 print(f"  Auto-matched (confidence: {best_score:.1f}%): {best_match}")
+                if save_progress_file:
+                    self.save_mappings(mappings, save_progress_file)
                 continue
             
             selected_name = self.prompt_user_selection(finnhub_name, ticker, fuzzy_matches)
             if selected_name:
                 mappings[ticker] = firebase_companies[selected_name]
                 manual_matches += 1
+                if save_progress_file:
+                    self.save_mappings(mappings, save_progress_file)
             else:
                 skipped += 1
         
@@ -192,6 +212,20 @@ class TickerMapper:
         print(f"{'='*60}\n")
         
         return mappings
+    
+    def load_existing_mappings(self, input_file: str = "ticker_mappings.json") -> Dict[str, str]:
+        """Load existing mappings from a JSON file."""
+        if not os.path.exists(input_file):
+            return {}
+        
+        try:
+            with open(input_file, 'r') as f:
+                mappings = json.load(f)
+                print(f"Loaded {len(mappings)} existing mappings from {input_file}")
+                return mappings
+        except Exception as e:
+            print(f"Warning: Could not load existing mappings: {e}")
+            return {}
     
     def save_mappings(self, mappings: Dict[str, str], output_file: str = "ticker_mappings.json"):
         """Save ticker to company ID mappings to a JSON file."""
@@ -216,7 +250,9 @@ class TickerMapper:
         mappings_ref.update(updates)
         print(f"Saved {len(mappings)} mappings to Firebase")
     
-    def run(self, save_to_firebase: bool = False, firebase_collection: str = "ticker_mappings"):
+    def run(self, save_to_firebase: bool = False, firebase_collection: str = "ticker_mappings",
+            resume: bool = True, output_file: str = "ticker_mappings.json",
+            save_progress: bool = True):
         """Run the complete matching process."""
         finnhub_companies = self.fetch_finnhub_companies()
         firebase_companies = self.fetch_firebase_companies()
@@ -229,13 +265,26 @@ class TickerMapper:
             print("No companies fetched from Firebase. Exiting.")
             return
         
-        mappings = self.process_matching(finnhub_companies, firebase_companies)
+        # Load existing mappings if resuming
+        existing_mappings = {}
+        if resume:
+            existing_mappings = self.load_existing_mappings(output_file)
+        
+        progress_file = output_file if save_progress else None
+        mappings = self.process_matching(
+            finnhub_companies, 
+            firebase_companies,
+            existing_mappings=existing_mappings,
+            save_progress_file=progress_file
+        )
         
         if not mappings:
             print("No mappings created. Exiting.")
             return
         
-        self.save_mappings(mappings)
+        # Final save (in case save_progress was False)
+        if not save_progress:
+            self.save_mappings(mappings, output_file)
         
         if save_to_firebase:
             self.save_mappings_to_firebase(mappings, firebase_collection)
@@ -261,6 +310,9 @@ def main():
     firebase_collection = config.get('firebase_collection', 'ticker_mappings')
     firebase_companies_collection = config.get('firebase_companies_collection', 'companies')
     firebase_name_field = config.get('firebase_name_field', 'name')
+    output_file = config.get('output_file', 'ticker_mappings.json')
+    resume = config.get('resume', True)
+    save_progress = config.get('save_progress', True)
     
     if not finnhub_api_key:
         print("Error: finnhub_api_key not found in config.json")
@@ -283,7 +335,13 @@ def main():
         firebase_database_url=firebase_database_url
     )
     
-    mapper.run(save_to_firebase=save_to_firebase, firebase_collection=firebase_collection)
+    mapper.run(
+        save_to_firebase=save_to_firebase, 
+        firebase_collection=firebase_collection,
+        resume=resume,
+        output_file=output_file,
+        save_progress=save_progress
+    )
 
 
 if __name__ == "__main__":
