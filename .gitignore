@@ -1,0 +1,29 @@
+# Configuration files with sensitive data
+config.json
+
+# Firebase credentials
+*.json
+!config.example.json
+!package.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Output files
+ticker_mappings.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
