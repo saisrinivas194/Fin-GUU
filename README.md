@@ -1,4 +1,3 @@
-git commit -m "Add gitignore file"
 # Ticker Mapper
 
 Matches companies from Finnhub with Firebase companies using fuzzy matching. Creates ticker to company ID mappings.
